@@ -15,11 +15,14 @@ Parameters:
 4. output_filename (str): The filename to save the top peers.
 5. json_format (bool, optional, default=False): Save peers information in JSON format (include moniker, node_id, ip, port, full_peer, latency).
 6. accepted_height_difference (int): Accepted difference between the expected height and the actual peer height.
-7. min_latency (int, optional): Minimum latency to filter peers.
+7. max_latency (int, optional): Maximum latency to filter peers.
 
 Example usage:
-    python3 peers_checker.py https://rpc-initia.01node.com "" 30 top_ips_ports.txt False 100 50
-    python3 peers_checker.py https://rpc-initia.01node.com peers.txt 30 top_ips_ports.txt False 100 50
+    python3 peers_checker.py https://rpc-initia.01node.com "" 30 top_peers.txt True 100 50
+    python3 peers_checker.py https://rpc-initia.01node.com peers.txt 30 top_peers.txt True 100 50
+
+Additional behavior:
+- The script creates another file with the name "output_filename"_ids_only.txt that contains only peers' IDs in the format id,id,id,id...
 """
 
 import socket
@@ -95,14 +98,14 @@ def parse_file(file_path):
         return []
 
 
-def check_nodes(lines, expected_height, min_latency, accepted_height_difference):
+def check_nodes(lines, expected_height, max_latency, accepted_height_difference):
     successful_connections = []
     moniker_info = []
     total_lines = len(lines)
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         future_to_ip_port = {
-            executor.submit(process_line, line, expected_height, min_latency, accepted_height_difference): line for line in lines
+            executor.submit(process_line, line, expected_height, max_latency, accepted_height_difference): line for line in lines
         }
 
         processed_count = 0
@@ -120,7 +123,7 @@ def check_nodes(lines, expected_height, min_latency, accepted_height_difference)
     return successful_connections, moniker_info
 
 
-def process_line(line, expected_height, min_latency, accepted_height_difference):
+def process_line(line, expected_height, max_latency, accepted_height_difference):
     parts = line.split('@')
     if len(parts) == 2:
         ip_port = parts[1].split(':')
@@ -128,7 +131,7 @@ def process_line(line, expected_height, min_latency, accepted_height_difference)
             ip = ip_port[0]
             port = int(ip_port[1])
             success, latency = check_connection(ip, port)
-            if success and (min_latency is None or latency <= min_latency):
+            if success and (max_latency is None or latency <= max_latency):
                 block_height, moniker, node_id = get_latest_block_height(ip, port + 1)
                 if block_height is not None:
                     if abs(block_height - expected_height) <= accepted_height_difference:
@@ -159,7 +162,21 @@ def save_top_connections(connections, output_filename, top_n=40):
             else:
                 file.write(',' + conn[0])
     logging.info(f"Saved top {top_n} connections to {output_filename}.")
+    save_ids_only(top_connections, output_filename)
     return len(top_connections)
+
+
+def save_ids_only(connections, output_filename):
+    ids_only_filename = output_filename.replace('.txt', '_ids_only.txt')
+    with open(ids_only_filename, 'w') as file:
+        first_entry = True
+        for conn in connections:
+            if first_entry:
+                file.write(conn[2]['node_id'])
+                first_entry = False
+            else:
+                file.write(',' + conn[2]['node_id'])
+    logging.info(f"Saved peer IDs to {ids_only_filename}.")
 
 
 def save_moniker_info(moniker_info, output_filename):
@@ -178,7 +195,7 @@ if __name__ == "__main__":
         output_filename = sys.argv[4]
         json_format = sys.argv[5].lower() == 'true'
         accepted_height_difference = int(sys.argv[6])
-        min_latency = int(sys.argv[7]) if len(sys.argv) > 7 else None
+        max_latency = int(sys.argv[7]) if len(sys.argv) > 7 else None
 
         expected_height = fetch_expected_height(rpc_url)
         if expected_height is None:
@@ -200,7 +217,7 @@ if __name__ == "__main__":
                 sys.exit(1)
             peers_source = f"{rpc_url}/net_info"
 
-        connections, moniker_info = check_nodes(lines, expected_height, min_latency, accepted_height_difference)
+        connections, moniker_info = check_nodes(lines, expected_height, max_latency, accepted_height_difference)
 
         matched_nodes = len(connections)
         saved_nodes = save_top_connections(connections, output_filename, top_n)
